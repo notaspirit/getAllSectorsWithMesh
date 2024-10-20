@@ -9,13 +9,21 @@ script goes into %AppData%\REDModding\WolvenKit\WScript
 !! IMPORTANT:
 in 0.0.3-alpha the folder structure within the project resources folder changed!
 New structure:
+
 resources/
+
 ├─ GSFM/
+
 │  ├─ input/
+
 │  │  ├─ meshCheckSet.json
+
 │  │  ├─ archiveContainsStreamingSectors.json
+
 │  ├─ settings.json 
+
 │  ├─ batchedSectors/
+
 │  ├─ output/
 
 To start from scratch delete everything in the GSFM folder except the input folder!

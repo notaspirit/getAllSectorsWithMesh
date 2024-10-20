@@ -4,7 +4,7 @@
 // Make sure archiveContainsStreamingSectors.json is in the resources folder
 // Make sure meshCheckSet.json is in the resources folder (and contains the meshes you're looking for)
 // Run the script
-// @version 0.0.2
+// @version 0.0.3
 // @author spirit
 
 

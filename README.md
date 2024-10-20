@@ -6,6 +6,9 @@ It will take a while as it checks all 37k exterior and interior sectors
 
 script goes into %AppData%\REDModding\WolvenKit\WScript
 
+Some sectors are expected to fail due to wolvenkit limitations, if you do not have Phantom Liberty installed expect around 2181 failed sectors.
+
+
 !! IMPORTANT:
 in 0.0.3-alpha the folder structure within the project resources folder changed!
 New structure:

@@ -5,3 +5,5 @@ You will need the list of all sectors and a properly formated json with all the 
 It will take a while as it checks all 37k exterior and interior sectors
 
 Both the "meshCheckSet.json" and "archiveContainsStreamingSectors.json" must be in the resources folder of the project you're running this on. 
+
+script goes into %AppData%\REDModding\WolvenKit\WScript

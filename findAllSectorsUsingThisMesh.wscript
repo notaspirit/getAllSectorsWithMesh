@@ -4,7 +4,7 @@
 // Make sure archiveContainsStreamingSectors.json is in the resources folder
 // Make sure meshCheckSet.json is in the resources folder (and contains the meshes you're looking for)
 // Run the script
-// @version 0.0.1
+// @version 0.0.2
 // @author spirit
 
 
@@ -12,9 +12,6 @@
 let skipEntities = true;
 
 const testMode = false;
-// max checked sectors
-const maxCheckedSectors = 10000000000000000000000;
-let checkedSectors = 0;
 
 // Imports 
 import * as Logger from 'Logger.wscript';
@@ -24,6 +21,7 @@ import * as TypeHelper from 'TypeHelper.wscript';
 // See sectorExample.txt for template
 let bachedJson = [];
 let sectorMatches = [];
+let failedSectors = [];
 
 let meshCheckSet = null;
 
@@ -31,10 +29,14 @@ function getMeshCheckSet() {
     try {
         const meshCheckSetRAW = wkit.LoadFromResources('meshCheckSet.json');
         meshCheckSet = JSON.parse(meshCheckSetRAW);
+        if (meshCheckSet.length > 0) {
         Logger.Success('Successfully got meshCheckSet.json');
         // Logger.Info('meshCheckSet.json: ' + JSON.stringify(meshCheckSet[0]));
+        } else {
+            Logger.Error('meshCheckSet.json is empty');
+        }
     } catch (error) {
-        Logger.Error('Failed to get meshCheckSet.json: ' + error.message);
+        Logger.Error('Failed to get meshCheckSet.json from resources');
     }
 }
 
@@ -44,9 +46,13 @@ function getArchiveContainsStreamingSectors() {
     try {
         const archiveContainsStreamingSectorsRAW = wkit.LoadFromResources('archiveContainsStreamingSectors.json');
         archiveContainsStreamingSectors = JSON.parse(archiveContainsStreamingSectorsRAW);
-        Logger.Success('Successfully got archiveContainsStreamingSectors.json');
+        if (archiveContainsStreamingSectors.length > 0) {
+            Logger.Success('Successfully got archiveContainsStreamingSectors.json');
+        } else {
+            Logger.Error('archiveContainsStreamingSectors.json is empty');
+        }
     } catch (error) {
-        Logger.Error('Failed to get archiveContainsStreamingSectors.json: ' + error.message);
+        Logger.Error('Failed to get archiveContainsStreamingSectors.json from resources');
     }
 
     // removes the archiveName from json
@@ -239,18 +245,22 @@ if (testMode === false) {
         let batchJson = [];
         // Processes each sector in the batch
         for (let sectorIndex in bachedJson[batchIndex]) {
-            if (checkedSectors > maxCheckedSectors) {
-                Logger.Error('Max checked sectors reached');
-                break;
-            }
-            checkedSectors++;
             let sectorName = bachedJson[batchIndex][sectorIndex].name;
-            Logger.Info(`Processing sector: ${sectorName}`);
-            let sectorGameFile = wkit.GetFileFromArchive(sectorName, OpenAs.GameFile);
-            let sectorData = TypeHelper.JsonParse(wkit.GameFileToJson(sectorGameFile));
-            const nodeData = sectorData["Data"]["RootChunk"]["nodeData"]["Data"];
-            const nodes = sectorData["Data"]["RootChunk"]["nodes"];
-
+            Logger.Info(`Processing sector: ${sectorName} (${sectorIndex}/${bachedJson[batchIndex].length}) (${batchIndex}/${bachedJson.length})`);
+            let sectorGameFile = null;
+            let sectorData = null;
+            let nodeData = null;
+            let nodes = null;
+            try {
+                sectorGameFile = wkit.GetFileFromArchive(sectorName, OpenAs.GameFile);
+                sectorData = TypeHelper.JsonParse(wkit.GameFileToJson(sectorGameFile));
+                nodeData = sectorData["Data"]["RootChunk"]["nodeData"]["Data"];
+                nodes = sectorData["Data"]["RootChunk"]["nodes"];
+            } catch (error) {
+                failedSectors.push(sectorName);
+                Logger.Error(`Failed to get sector data for ${sectorName}: ${error}`);
+                continue;
+            }
             let matchingNodes = [];
             for (let nodeIndex in nodes) {
                 if (getNodeInfo(nodes[nodeIndex], nodeIndex).length > 0) {
@@ -273,4 +283,8 @@ if (testMode === false) {
     }
     wkit.SaveToResources('SectorMatches.json', JSON.stringify(sectorMatches, null, 2));
     Logger.Success('Saved SectorMatches.json');
+
+    Logger.Info(`Failed to process ${failedSectors.length} sectors`);
+    wkit.SaveToResources('FailedSectors.json', JSON.stringify(failedSectors, null, 2));
+    Logger.Success('Saved FailedSectors.json');
 }

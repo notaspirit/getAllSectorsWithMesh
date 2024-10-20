@@ -9,9 +9,8 @@
 
 
 // If you know that the mesh you're looking for is not an entity, set this to true
+// WARNING: This is untested, so keep it true
 let skipEntities = true;
-
-const testMode = false;
 
 // Imports 
 import * as Logger from 'Logger.wscript';
@@ -19,62 +18,43 @@ import * as TypeHelper from 'TypeHelper.wscript';
 
 // Global variables
 // See sectorExample.txt for template
-let bachedJson = [];
 let sectorMatches = [];
 let failedSectors = [];
 
 let meshCheckSet = null;
+let settings = null;
+const batchSize = 1000;
 
-function getMeshCheckSet() {
-    try {
-        const meshCheckSetRAW = wkit.LoadFromResources('meshCheckSet.json');
-        meshCheckSet = JSON.parse(meshCheckSetRAW);
-        if (meshCheckSet.length > 0) {
-        Logger.Success('Successfully got meshCheckSet.json');
-        // Logger.Info('meshCheckSet.json: ' + JSON.stringify(meshCheckSet[0]));
-        } else {
-            Logger.Error('meshCheckSet.json is empty');
-        }
-    } catch (error) {
-        Logger.Error('Failed to get meshCheckSet.json from resources');
-    }
-}
+let defaultSettings = {batchSize: batchSize, totalBatches: 0, lastBatch: 0};
 
-function getArchiveContainsStreamingSectors() {
-    let archiveContainsStreamingSectors = [];
-    let cleanedJson = [];
-    try {
-        const archiveContainsStreamingSectorsRAW = wkit.LoadFromResources('archiveContainsStreamingSectors.json');
-        archiveContainsStreamingSectors = JSON.parse(archiveContainsStreamingSectorsRAW);
-        if (archiveContainsStreamingSectors.length > 0) {
-            Logger.Success('Successfully got archiveContainsStreamingSectors.json');
-        } else {
-            Logger.Error('archiveContainsStreamingSectors.json is empty');
-        }
-    } catch (error) {
-        Logger.Error('Failed to get archiveContainsStreamingSectors.json from resources');
-    }
 
-    // removes the archiveName from json
-    for (let jsonIndex in archiveContainsStreamingSectors) {
-        for (let sectorIndex in archiveContainsStreamingSectors[jsonIndex].outputs) {
-            cleanedJson.push(archiveContainsStreamingSectors[jsonIndex].outputs[sectorIndex]);
-        }
-    }
-    Logger.Info('Length of cleanedJson: ' + cleanedJson.length);
-    // Splits the json into sets of 1000 sectors to process in batches
-    const batchSize = 1000;
-    for (let i = 0; i < cleanedJson.length; i += batchSize) {
-        const batch = cleanedJson.slice(i, i + batchSize);
-        bachedJson.push(batch);
-}
+/*
+Conceptually what we need to do here is:
+check if the list of streaming sectors is already batched (with the correct batch size)
+if there are batches but they are not the correct size, we error out
+if there are no batches, we batch the sectors and exit
+if there are batches and they are the correct size, we continue
+we check if the batch is already processed, if it is we skip it
+if it is not, we process it and exit after
 
-Logger.Info('Length of bachedJson: ' + bachedJson.length);
-}
+would be very nice if we don't have to load the entire json with the list of streaming sectors into memory
+will need to restructure it for that so that a different json contains the length and current progress
 
-getArchiveContainsStreamingSectors();
-getMeshCheckSet();
 
+folder structure for the resources folder:
+resources/
+├─ GSFM/
+│  ├─ input/
+│  │  ├─ meshCheckSet.json
+│  │  ├─ archiveContainsStreamingSectors.json
+│  ├─ settings.json 
+│  ├─ batchedSectors/
+│  ├─ output/
+
+If formatted properly e.g. using / instead of \ for the folder structure "SaveToResources" can handle creating the folders
+*/
+
+// Functions
 // Extracts Mesh and Transform data from component List
 function getMeshSetFromComponents(components) {
     let localMeshGroup = [];
@@ -207,84 +187,136 @@ function getNodeInfo(nodeInstance, nodeIndex) {
     return [];
 }
 
-if (testMode === true) {
-    let testSector = 'base\\worlds\\03_night_city\\_compiled\\default\\exterior_0_-34_0_0.streamingsector';
-    let testSectorGameFile = wkit.GetFileFromArchive(testSector, OpenAs.GameFile);
-    let testSectorData = TypeHelper.JsonParse(wkit.GameFileToJson(testSectorGameFile));
-    let nodes = testSectorData["Data"]["RootChunk"]["nodes"];
-    let nodeData = testSectorData["Data"]["RootChunk"]["nodeData"]["Data"];
-
-    let matchingNodes = [];
-    for (let nodeIndex in nodes) {
-        if (getNodeInfo(nodes[nodeIndex], nodeIndex).length > 0) {
-            matchingNodes.push(getNodeInfo(nodes[nodeIndex], nodeIndex));
+function processBatch(batchJson) {
+    // Processes each sector in the batch
+    for (let sectorIndex in batchJson) {
+        let sectorName = batchJson[sectorIndex].name;
+        Logger.Info(`Processing sector: ${sectorName} (${sectorIndex}/${batchJson.length})`);
+        let sectorGameFile = null;
+        let sectorData = null;
+        let nodeData = null;
+        let nodes = null;
+        try {
+            sectorGameFile = wkit.GetFileFromArchive(sectorName, OpenAs.GameFile);
+            sectorData = TypeHelper.JsonParse(wkit.GameFileToJson(sectorGameFile));
+            nodeData = sectorData["Data"]["RootChunk"]["nodeData"]["Data"];
+            nodes = sectorData["Data"]["RootChunk"]["nodes"];
+        } catch (error) {
+            failedSectors.push(sectorName);
+            Logger.Error(`Failed to get sector data for ${sectorName}: ${error}`);
+            continue;
         }
-    }
-    let nodeIndices = [];
-    if (matchingNodes.length > 0) {
-        Logger.Info(`Found ${matchingNodes.length} meshes for sector ${testSector}`);
-        for (let nodeDataIndex in nodeData) {
-            for (let nodeIndex in matchingNodes) {
-                if (nodeData[nodeDataIndex]["NodeIndex"] == nodeIndex) {
-                    nodeIndices.push(nodeDataIndex);
-                }
+        let matchingNodes = [];
+        for (let nodeIndex in nodes) {
+            if (getNodeInfo(nodes[nodeIndex], nodeIndex).length > 0) {
+                matchingNodes.push(getNodeInfo(nodes[nodeIndex], nodeIndex));
             }
         }
-        sectorMatches.push({sectorName: testSector, nodeIndices: nodeIndices});
+        let nodeDataIndices = [];
+        if (matchingNodes.length > 0) {
+            Logger.Info(`Found ${matchingNodes.length} meshes for sector ${sectorName}`);
+            for (let nodeDataIndex in nodeData) {
+                for (let nodeIndex in matchingNodes) {
+                    if (nodeData[nodeDataIndex]["NodeIndex"] == nodeIndex) {
+                        nodeDataIndices.push(nodeDataIndex);
+                    }
+                }
+            }
+            sectorMatches.push({sectorName: sectorName, nodeDataIndices: nodeDataIndices});
+        }
     }
-    wkit.SaveToResources('testSectorMatches.json', JSON.stringify(sectorMatches, null, 2));
-    Logger.Success('Saved testSectorMatches.json');
+    return sectorMatches;
 }
 
 
 
-if (testMode === false) {
-    // Processes each batch of sectors
-    for (let batchIndex in bachedJson) {
-        Logger.Info('Processing batch: ' + batchIndex);
-        let batchJson = [];
-        // Processes each sector in the batch
-        for (let sectorIndex in bachedJson[batchIndex]) {
-            let sectorName = bachedJson[batchIndex][sectorIndex].name;
-            Logger.Info(`Processing sector: ${sectorName} (${sectorIndex}/${bachedJson[batchIndex].length}) (${batchIndex}/${bachedJson.length})`);
-            let sectorGameFile = null;
-            let sectorData = null;
-            let nodeData = null;
-            let nodes = null;
-            try {
-                sectorGameFile = wkit.GetFileFromArchive(sectorName, OpenAs.GameFile);
-                sectorData = TypeHelper.JsonParse(wkit.GameFileToJson(sectorGameFile));
-                nodeData = sectorData["Data"]["RootChunk"]["nodeData"]["Data"];
-                nodes = sectorData["Data"]["RootChunk"]["nodes"];
-            } catch (error) {
-                failedSectors.push(sectorName);
-                Logger.Error(`Failed to get sector data for ${sectorName}: ${error}`);
-                continue;
-            }
-            let matchingNodes = [];
-            for (let nodeIndex in nodes) {
-                if (getNodeInfo(nodes[nodeIndex], nodeIndex).length > 0) {
-                    matchingNodes.push(getNodeInfo(nodes[nodeIndex], nodeIndex));
-                }
-            }
-            let nodeDataIndices = [];
-            if (matchingNodes.length > 0) {
-                Logger.Info(`Found ${matchingNodes.length} meshes for sector ${sectorName}`);
-                for (let nodeDataIndex in nodeData) {
-                    for (let nodeIndex in matchingNodes) {
-                        if (nodeData[nodeDataIndex]["NodeIndex"] == nodeIndex) {
-                            nodeDataIndices.push(nodeDataIndex);
-                        }
-                    }
-                }
-                sectorMatches.push({sectorName: sectorName, nodeDataIndices: nodeDataIndices});
-            }
+
+// Logic thing
+try {
+    let meshCheckSetRAW = wkit.LoadFromResources('GSFM/input/meshCheckSet.json');
+    meshCheckSet = JSON.parse(meshCheckSetRAW);
+    let testValue = meshCheckSet[0];
+    Logger.Success(`GSFM/input/meshCheckSet.json exists`);
+} catch (error) {
+    Logger.Error(`GSFM/input/meshCheckSet.json does not exist`);
+    Logger.Error(`Error: ${error}`);
+}
+
+try {
+    let settingsRaw = wkit.LoadFromResources('GSFM/settings.json');
+    settings = JSON.parse(settingsRaw);
+    let settingsTest = settings.batchSize;
+    Logger.Success(`GSFM/settings.json exists`);
+} catch (error) {
+    wkit.SaveToResources('GSFM/settings.json', JSON.stringify(defaultSettings, null, 2));
+    let settingsRaw = wkit.LoadFromResources('GSFM/settings.json');
+    settings = JSON.parse(settingsRaw);
+    Logger.Success(`GSFM/settings.json created`);
+}
+
+if (settings.batchSize !== batchSize) {
+    Logger.Error(`Batch size in settings.json is not equal to the current batch size, adjust batch size or clear current progress`);
+}
+if (settings.totalBatches === 0) {
+    Logger.Info(`No batches found, creating batches`);
+    let archiveContainsStreamingSectors = [];
+    let cleanedJson = [];
+    try {
+        const archiveContainsStreamingSectorsRAW = wkit.LoadFromResources('GSFM/input/archiveContainsStreamingSectors.json');
+        archiveContainsStreamingSectors = JSON.parse(archiveContainsStreamingSectorsRAW);
+        if (archiveContainsStreamingSectors.length > 0) {
+            Logger.Success('Successfully got archiveContainsStreamingSectors.json');
+        } else {
+            Logger.Error('archiveContainsStreamingSectors.json is empty');
+        }
+    } catch (error) {
+        Logger.Error('Failed to get archiveContainsStreamingSectors.json from resources');
+    }
+
+    // removes the archiveName from json
+    for (let jsonIndex in archiveContainsStreamingSectors) {
+        for (let sectorIndex in archiveContainsStreamingSectors[jsonIndex].outputs) {
+            cleanedJson.push(archiveContainsStreamingSectors[jsonIndex].outputs[sectorIndex]);
         }
     }
-    wkit.SaveToResources('SectorMatches.json', JSON.stringify(sectorMatches, null, 2));
-    Logger.Success('Saved SectorMatches.json');
-
-    Logger.Info(`Failed to process ${failedSectors.length} sectors`);
-    wkit.SaveToResources('FailedSectors.json', JSON.stringify(failedSectors, null, 2));
-    Logger.Success('Saved FailedSectors.json');
+    Logger.Info(`Total Sectors: ${cleanedJson.length}`);
+    // Splits the json into sets of 1000 sectors to process in batches
+    let batchIndex = 1;
+    for (let i = 0; i < cleanedJson.length; i += batchSize) {
+        const batch = cleanedJson.slice(i, i + batchSize);
+        wkit.SaveToResources(`GSFM/batchedSectors/batch${batchIndex}.json`, JSON.stringify(batch, null, 2));
+        batchIndex++;
+    }
+    settings.totalBatches = batchIndex;
+    wkit.SaveToResources('GSFM/settings.json', JSON.stringify(settings, null, 2));
+    Logger.Success(`GSFM/settings.json updated`);
+    Logger.Info(`Total batches: ${settings.totalBatches}`);
+    Logger.Info(`To start processing batches run script again`);
+} else if (settings.lastBatch < settings.totalBatches) {
+    Logger.Info(`Batches already exist, starting next batch: ${settings.lastBatch + 1}/${settings.totalBatches}`);
+    let batchJsonRAW = wkit.LoadFromResources(`GSFM/batchedSectors/batch${settings.lastBatch + 1}.json`);
+    let batchJson = JSON.parse(batchJsonRAW);
+    let sectorMatchesOutput = processBatch(batchJson);
+    settings.lastBatch++;
+    wkit.SaveToResources('GSFM/settings.json', JSON.stringify(settings, null, 2));
+    Logger.Success(`GSFM/settings.json updated`);
+    wkit.SaveToResources(`GSFM/output/batch${settings.lastBatch}.json`, JSON.stringify(sectorMatchesOutput, null, 2));
+    Logger.Success(`GSFM/output/batch${settings.lastBatch}.json saved`);
+    Logger.Info('For better stability, clear wolvenkit logs');
+    Logger.Info(`To continue processing batches run script again`);
+    if (failedSectors.length > 0) {
+        Logger.Info(`Failed to process ${failedSectors.length} sectors`);
+        wkit.SaveToResources(`GSFM/output/failedSectors${settings.lastBatch}.json`, JSON.stringify(failedSectors, null, 2));
+        Logger.Success(`GSFM/output/failedSectors${settings.lastBatch}.json saved`);
+    }
+} else {
+    Logger.Info(`All batches processed, merging results`);
+    let finalOutput = [];
+    for (let batchIndex in settings.output) {
+        let batchOutputRAW = wkit.LoadFromResources(`GSFM/output/batch${batchIndex}.json`);
+        let batchOutput = JSON.parse(batchOutputRAW);
+        finalOutput.push(...batchOutput);
+    }
+    wkit.SaveToResources('GSFM/output/finalOutput.json', JSON.stringify(finalOutput, null, 2));
+    Logger.Success('GSFM/output/finalOutput.json saved');
 }
